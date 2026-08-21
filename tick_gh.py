@@ -17,6 +17,7 @@ import time
 import urllib.request
 
 import broker
+from notify import notify
 
 GIST_TOKEN = os.environ.get("GIST_TOKEN")
 GIST_ID = os.environ.get("GIST_ID")
@@ -169,9 +170,14 @@ def resolve_pending(sym, s, prev_sum, prev_count, state=None, trades_buffer=None
     outcome = "WIN " if success else "LOSS"
     pnl_txt = f"${pnl:+.2f}" if pnl is not None else "n/a (no poly price)"
     log(f"  RESOLVED {sym} {trade['period_start_dt']} dir={trade['dir']} twap={twap:.4f} open={pt['open']:.4f} -> {outcome} pnl={pnl_txt}")
+    live_txt = " · РЕАЛЬНЫЙ ОРДЕР" if pt.get("live_order_ok") else ""
+    notify(f"{'✅ WIN' if success else '❌ LOSS'} {sym}",
+           f"{trade['dir'].upper()} {pnl_txt}{live_txt}\nTWAP {twap:.2f} vs open {pt['open']:.2f}",
+           tags="chart_with_upwards_trend" if success else "chart_with_downwards_trend")
     if not success and state is not None:
         state["paused"] = True
         log("  *** STOP-LOSS -- TRADING PAUSED. Set paused=false in the gist (or via --resume) to re-enable. ***")
+        notify("⏸ Бот на паузе", f"Стоп-лосс по {sym} — торговля остановлена до paused=false", tags="warning")
     if success and pt.get("live_order_ok") and state is not None and state.get("live_stage") != "escalated":
         state["live_stage"] = "escalated"
         log(f"  *** first real order won -- live size escalated to ${LIVE_RISK_USD_ESCALATED:.0f} for future trades ***")
@@ -250,6 +256,8 @@ def advance_state(sym, s, new_bars, state=None, trades_buffer=None, poly_price_f
                                 state["active_symbol"] = sym
                             pp = f"{poly_price:.3f}" if poly_price is not None else "N/A"
                             log(f"  ENTRY {sym} {dirtxt} @ decision_price={c:.4f} open={period_open:.4f} poly_price={pp} slug={slug}")
+                            notify(f"📥 Вход {sym} {dirtxt}", f"Polymarket price {pp}\ndecision {c:.2f} vs open {period_open:.2f}",
+                                   tags="dart")
                             escalated = state is not None and state.get("live_stage") == "escalated"
                             live_size = LIVE_RISK_USD_ESCALATED if escalated else LIVE_RISK_USD_START
                             result = broker.place_order(token_id, s["trigger_dir"], poly_price, live_size)
@@ -257,6 +265,9 @@ def advance_state(sym, s, new_bars, state=None, trades_buffer=None, poly_price_f
                             if result["attempted"]:
                                 status = "OK" if result["ok"] else "REJECTED"
                                 log(f"  LIVE ORDER {sym} {dirtxt} ${live_size:.0f} -> {status}: {result['detail']}")
+                                notify(f"{'💰' if result['ok'] else '⚠️'} Реальный ордер {sym} {dirtxt} ${live_size:.0f}",
+                                       f"{status}: {result['detail'][:150]}",
+                                       tags="moneybag" if result["ok"] else "warning")
                     else:
                         log(f"  (skip, backlog) {sym} would-have-fired {dirtxt} -- catching up, not live")
 

@@ -34,4 +34,5 @@ jobs:
           LIVE_RISK_USD_ESCALATED: ${{ secrets.LIVE_RISK_USD_ESCALATED }}
           POLY_PRIVATE_KEY: ${{ secrets.POLY_PRIVATE_KEY }}
           POLY_FUNDER: ${{ secrets.POLY_FUNDER }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python tick_gh.py --loop-for 280
