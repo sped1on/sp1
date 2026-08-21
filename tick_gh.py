@@ -117,6 +117,9 @@ def load_state(gist_data):
         state = json.loads(content)
         state.setdefault("active_symbol", None)
         state.setdefault("paused", False)
+        state.setdefault("symbols", {s: default_symbol_state() for s in SYMBOLS})
+        for s in SYMBOLS:
+            state["symbols"].setdefault(s, default_symbol_state())
         return state
     return dict(started_at=time.strftime("%Y-%m-%d %H:%M:%S"), active_symbol=None, paused=False,
                 symbols={s: default_symbol_state() for s in SYMBOLS})
