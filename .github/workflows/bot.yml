@@ -1,0 +1,30 @@
+name: polybot
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    concurrency:
+      group: polybot-tick
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: run bounded tick loop
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+          THRESH_PCT: ${{ secrets.THRESH_PCT }}
+          HOLD_MIN: ${{ secrets.HOLD_MIN }}
+          MAX_DEV_PCT: ${{ secrets.MAX_DEV_PCT }}
+          MIN_ENTRY_DIST_PCT: ${{ secrets.MIN_ENTRY_DIST_PCT }}
+          RISK_USD: ${{ secrets.RISK_USD }}
+          MAX_ENTRY_PRICE: ${{ secrets.MAX_ENTRY_PRICE }}
+        run: python tick_gh.py --loop-for 280
