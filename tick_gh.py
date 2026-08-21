@@ -29,7 +29,6 @@ SLUG_PREFIX = {"BTCUSDT": "btc", "ETHUSDT": "eth"}
 CANDLE_MIN = 15
 THRESH_PCT = float(os.environ.get("THRESH_PCT") or "0.10")
 HOLD_MIN = int(os.environ.get("HOLD_MIN") or "10")
-MAX_DEV_PCT = float(os.environ.get("MAX_DEV_PCT") or "0.0")
 MIN_ENTRY_DIST_PCT = float(os.environ.get("MIN_ENTRY_DIST_PCT") or "0.15")
 RISK_USD = float(os.environ.get("RISK_USD") or "50.0")
 # Real-order sizing only (paper stats always use RISK_USD, untouched). Starts
@@ -236,12 +235,6 @@ def advance_state(sym, s, new_bars, state=None, trades_buffer=None, poly_price_f
                 if (s["side_dir"] == 1 and h >= up_lvl) or (s["side_dir"] == -1 and l <= dn_lvl):
                     s["reached"] = True
 
-            if not s["dead"] and MAX_DEV_PCT > 0 and s["side_dir"] != 0:
-                too_far_up = s["side_dir"] == 1 and h >= period_open * (1 + MAX_DEV_PCT / 100)
-                too_far_dn = s["side_dir"] == -1 and l <= period_open * (1 - MAX_DEV_PCT / 100)
-                if too_far_up or too_far_dn:
-                    s["dead"] = True
-
             if not s["dead"] and me == HOLD_MIN:
                 cur_dist_pct = abs(c - period_open) / period_open * 100
                 dist_ok = MIN_ENTRY_DIST_PCT <= 0 or cur_dist_pct >= MIN_ENTRY_DIST_PCT
@@ -313,7 +306,7 @@ def resolve_candidates(candidates, state):
                tags="dart")
         escalated = state is not None and state.get("live_stage") == "escalated"
         live_size = LIVE_RISK_USD_ESCALATED if escalated else LIVE_RISK_USD_START
-        result = broker.place_order(cand["token_id"], cand["trigger_dir"], cand["poly_price"], live_size)
+        result = broker.place_order(cand["token_id"], cand["trigger_dir"], cand["poly_price"], live_size, cand["slug"])
         s["pending_trade"]["live_order_ok"] = result["ok"]
         if result["attempted"]:
             status = "OK" if result["ok"] else "REJECTED"

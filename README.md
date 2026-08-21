@@ -43,7 +43,7 @@ git push -u origin main
 - `GIST_TOKEN` — токен из шага 1
 - `GIST_ID` — id из шага 2
 - (опционально, иначе берутся значения по умолчанию конфига "Улучшенный"):
-  `THRESH_PCT=0.10`, `HOLD_MIN=10`, `MAX_DEV_PCT=0.0`, `MIN_ENTRY_DIST_PCT=0.15`, `RISK_USD=50`, `MAX_ENTRY_PRICE=0.995`
+  `THRESH_PCT=0.10`, `HOLD_MIN=10`, `MIN_ENTRY_DIST_PCT=0.15`, `RISK_USD=50`, `MAX_ENTRY_PRICE=0.995`
 
 ### Реальная торговля (опционально, по умолчанию выключено)
 
