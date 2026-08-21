@@ -35,7 +35,7 @@ def run_live_sim(df_bars, chunk_sizes):
     s = state["symbols"]["TEST"]
 
     def fake_poly_price(sym, ts, direction):
-        return None, "test-slug"
+        return None, "test-slug", None
 
     bars = [dict(open_time=int(row.open_time), open=row.open, high=row.high, low=row.low, close=row.close, is_live=True)
             for row in df_bars.itertuples()]

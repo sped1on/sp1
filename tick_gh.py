@@ -16,6 +16,8 @@ import os
 import time
 import urllib.request
 
+import broker
+
 GIST_TOKEN = os.environ.get("GIST_TOKEN")
 GIST_ID = os.environ.get("GIST_ID")
 STATE_FILENAME = "state.json"
@@ -29,6 +31,7 @@ HOLD_MIN = int(os.environ.get("HOLD_MIN") or "10")
 MAX_DEV_PCT = float(os.environ.get("MAX_DEV_PCT") or "0.0")
 MIN_ENTRY_DIST_PCT = float(os.environ.get("MIN_ENTRY_DIST_PCT") or "0.15")
 RISK_USD = float(os.environ.get("RISK_USD") or "50.0")
+LIVE_RISK_USD = float(os.environ.get("LIVE_RISK_USD") or str(RISK_USD))  # $ size for REAL orders only; paper stats always use RISK_USD
 MAX_ENTRY_PRICE = float(os.environ.get("MAX_ENTRY_PRICE") or "0.995")
 PERIOD_MS = CANDLE_MIN * 60 * 1000
 LIVE_TOLERANCE_MS = 120_000
@@ -93,16 +96,17 @@ def fetch_poly_price(symbol, period_start_ms, direction):
     data = http_json(f"https://gamma-api.polymarket.com/events?slug={slug}")
     if not data:
         log(f"  Polymarket lookup MISS for slug={slug}")
-        return None, slug
+        return None, slug, None
     try:
         m = data[0]["markets"][0]
         outcomes = json.loads(m["outcomes"])
         prices = json.loads(m["outcomePrices"])
+        token_ids = json.loads(m["clobTokenIds"])
         idx = outcomes.index("Up" if direction == 1 else "Down")
-        return float(prices[idx]), slug
+        return float(prices[idx]), slug, token_ids[idx]
     except Exception as e:
         log(f"  Polymarket parse error for slug={slug}: {e}")
-        return None, slug
+        return None, slug, None
 
 
 def default_symbol_state():
@@ -220,7 +224,7 @@ def advance_state(sym, s, new_bars, state=None, trades_buffer=None, poly_price_f
                     elif other_busy:
                         log(f"  (skip, other asset active) {sym} would-have-fired {dirtxt} -- {state.get('active_symbol')} busy")
                     elif bar.get("is_live", True):
-                        poly_price, slug = poly_price_fn(sym, s["period_start_ts"], s["trigger_dir"])
+                        poly_price, slug, token_id = poly_price_fn(sym, s["period_start_ts"], s["trigger_dir"])
                         if poly_price is not None and poly_price > MAX_ENTRY_PRICE:
                             log(f"  (skip, price too high) {sym} {dirtxt} poly_price={poly_price:.3f} > cap {MAX_ENTRY_PRICE:.3f}")
                         else:
@@ -233,6 +237,10 @@ def advance_state(sym, s, new_bars, state=None, trades_buffer=None, poly_price_f
                                 state["active_symbol"] = sym
                             pp = f"{poly_price:.3f}" if poly_price is not None else "N/A"
                             log(f"  ENTRY {sym} {dirtxt} @ decision_price={c:.4f} open={period_open:.4f} poly_price={pp} slug={slug}")
+                            result = broker.place_order(token_id, s["trigger_dir"], poly_price, LIVE_RISK_USD)
+                            if result["attempted"]:
+                                status = "OK" if result["ok"] else "REJECTED"
+                                log(f"  LIVE ORDER {sym} {dirtxt} -> {status}: {result['detail']}")
                     else:
                         log(f"  (skip, backlog) {sym} would-have-fired {dirtxt} -- catching up, not live")
 
