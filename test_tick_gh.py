@@ -51,7 +51,38 @@ def run_live_sim(df_bars, chunk_sizes):
     return trades_buffer
 
 
-print("Cross-validate against run_twap() on ~100k real BTC bars (random chunk sizes 1-5)")
+print("Same-tick race between two symbols -- cheaper Polymarket price should win")
+_orig_place_order = bot.broker.place_order
+bot.broker.place_order = lambda *a, **k: {"attempted": False, "ok": False, "detail": "test-stub"}
+try:
+    def trigger_bars():
+        rows = [(100, 100, 100, 100), (100, 100.16, 100.02, 100.1)] + [(100.2, 100.2, 100.2, 100.2)] * 9
+        df = pd.DataFrame(rows, columns=["open", "high", "low", "close"], dtype=float)
+        df["dt"] = pd.date_range("2024-01-01 00:00", periods=len(df), freq="1min", tz="UTC")
+        df["open_time"] = (df["dt"].astype("int64") // 1_000_000)
+        return [dict(open_time=int(r.open_time), open=r.open, high=r.high, low=r.low, close=r.close, is_live=True)
+                for r in df.itertuples()]
+
+    def race_price_fn(sym, ts, direction):
+        price = 0.90 if sym == "BTCUSDT" else 0.60
+        return price, f"{sym}-slug", f"{sym}-token"
+
+    race_state = dict(active_symbol=None, paused=False,
+                       symbols={"BTCUSDT": bot.default_symbol_state(), "ETHUSDT": bot.default_symbol_state()})
+    race_candidates = []
+    for sym in ("BTCUSDT", "ETHUSDT"):
+        s = race_state["symbols"][sym]
+        race_state["symbols"][sym] = bot.advance_state(
+            sym, s, trigger_bars(), state=race_state, poly_price_fn=race_price_fn, candidates=race_candidates)
+
+    check("both symbols produced a candidate this tick", len(race_candidates), 2)
+    bot.resolve_candidates(race_candidates, race_state)
+    check("cheaper symbol (ETH @ 0.60) got active_symbol lock", race_state["active_symbol"], "ETHUSDT")
+    check("pricier symbol (BTC @ 0.90) did NOT get a pending_trade", race_state["symbols"]["BTCUSDT"]["pending_trade"], None)
+finally:
+    bot.broker.place_order = _orig_place_order
+
+print("\nCross-validate against run_twap() on ~100k real BTC bars (random chunk sizes 1-5)")
 df_real = pd.read_csv(os.path.join(SCRATCH, "data", "BTCUSDT_1m_3y.csv"))
 df_real["dt"] = pd.to_datetime(df_real["open_time"], unit="ms", utc=True)
 df_real = df_real.drop_duplicates("open_time").sort_values("dt").reset_index(drop=True)

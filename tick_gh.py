@@ -183,7 +183,19 @@ def resolve_pending(sym, s, prev_sum, prev_count, state=None, trades_buffer=None
         log(f"  *** first real order won -- live size escalated to ${LIVE_RISK_USD_ESCALATED:.0f} for future trades ***")
 
 
-def advance_state(sym, s, new_bars, state=None, trades_buffer=None, poly_price_fn=fetch_poly_price):
+def advance_state(sym, s, new_bars, state=None, trades_buffer=None, poly_price_fn=fetch_poly_price, candidates=None):
+    """candidates, if given, is a list SHARED across all symbols processed in
+    the same tick: a would-be entry is appended to it rather than committed
+    immediately, and the caller must call resolve_candidates(candidates,
+    state) once after every symbol has been advanced this tick -- that's
+    what actually decides (cheapest Polymarket price wins) and commits. If
+    not given, this call owns a private list and resolves it itself before
+    returning, so a single-symbol caller (e.g. tests) still gets an
+    immediate commit exactly like before this feature existed."""
+    owns_candidates = candidates is None
+    if owns_candidates:
+        candidates = []
+
     def resolve_fn(sym_, s_, prev_sum, prev_count):
         resolve_pending(sym_, s_, prev_sum, prev_count, state=state, trades_buffer=trades_buffer)
 
@@ -247,35 +259,71 @@ def advance_state(sym, s, new_bars, state=None, trades_buffer=None, poly_price_f
                         if poly_price is not None and poly_price > MAX_ENTRY_PRICE:
                             log(f"  (skip, price too high) {sym} {dirtxt} poly_price={poly_price:.3f} > cap {MAX_ENTRY_PRICE:.3f}")
                         else:
-                            s["pending_trade"] = dict(
-                                period_start_ts=s["period_start_ts"], open=period_open, dir=s["trigger_dir"],
-                                decision_price=c, poly_price=poly_price, poly_slug=slug,
-                                entry_logged_at=time.strftime("%Y-%m-%d %H:%M:%S"),
-                            )
-                            if state is not None:
-                                state["active_symbol"] = sym
-                            pp = f"{poly_price:.3f}" if poly_price is not None else "N/A"
-                            log(f"  ENTRY {sym} {dirtxt} @ decision_price={c:.4f} open={period_open:.4f} poly_price={pp} slug={slug}")
-                            notify(f"📥 Вход {sym} {dirtxt}", f"Polymarket price {pp}\ndecision {c:.2f} vs open {period_open:.2f}",
-                                   tags="dart")
-                            escalated = state is not None and state.get("live_stage") == "escalated"
-                            live_size = LIVE_RISK_USD_ESCALATED if escalated else LIVE_RISK_USD_START
-                            result = broker.place_order(token_id, s["trigger_dir"], poly_price, live_size)
-                            s["pending_trade"]["live_order_ok"] = result["ok"]
-                            if result["attempted"]:
-                                status = "OK" if result["ok"] else "REJECTED"
-                                log(f"  LIVE ORDER {sym} {dirtxt} ${live_size:.0f} -> {status}: {result['detail']}")
-                                notify(f"{'💰' if result['ok'] else '⚠️'} Реальный ордер {sym} {dirtxt} ${live_size:.0f}",
-                                       f"{status}: {result['detail'][:150]}",
-                                       tags="moneybag" if result["ok"] else "warning")
+                            # Don't commit yet -- just register as a candidate. If BTC and ETH
+                            # both fire in this same tick, resolve_candidates() (called once
+                            # after ALL symbols have been processed) enters only the cheaper
+                            # one. For the common single-candidate case this behaves exactly
+                            # like an immediate commit (see resolve_candidates).
+                            candidates.append(dict(
+                                sym=sym, s=s, dirtxt=dirtxt, poly_price=poly_price, token_id=token_id,
+                                slug=slug, decision_price=c, period_open=period_open,
+                                period_start_ts=s["period_start_ts"], period_id=s["period_id"],
+                                trigger_dir=s["trigger_dir"],
+                            ))
                     else:
                         log(f"  (skip, backlog) {sym} would-have-fired {dirtxt} -- catching up, not live")
 
         s["last_processed_ts"] = ts
+
+    if owns_candidates:
+        resolve_candidates(candidates, state)
     return s
 
 
-def process_symbol(sym, state, trades_buffer):
+def resolve_candidates(candidates, state):
+    """Commit exactly one candidate this tick: whichever has the cheapest
+    Polymarket price (a lookup miss / None price is treated as worst, only
+    chosen if it's the sole candidate). Runs real broker order + notify for
+    the winner; everyone else is logged as skipped, never committed -- their
+    trigger_dir was already set on their own state so they won't be
+    re-evaluated again this period."""
+    if not candidates:
+        return
+    chosen = min(candidates, key=lambda cand: cand["poly_price"] if cand["poly_price"] is not None else float("inf"))
+    for cand in candidates:
+        s, sym, dirtxt = cand["s"], cand["sym"], cand["dirtxt"]
+        pp = f"{cand['poly_price']:.3f}" if cand["poly_price"] is not None else "N/A"
+        if cand is not chosen:
+            cpp = f"{chosen['poly_price']:.3f}" if chosen["poly_price"] is not None else "N/A"
+            log(f"  (skip, pricier than alternative) {sym} {dirtxt} @ {pp} -- entered {chosen['sym']} @ {cpp} instead this tick")
+            continue
+        if s["period_id"] != cand["period_id"]:
+            log(f"  (skip, stale candidate) {sym} {dirtxt} -- symbol state moved on before this could commit")
+            continue
+        s["pending_trade"] = dict(
+            period_start_ts=cand["period_start_ts"], open=cand["period_open"], dir=cand["trigger_dir"],
+            decision_price=cand["decision_price"], poly_price=cand["poly_price"], poly_slug=cand["slug"],
+            entry_logged_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        if state is not None:
+            state["active_symbol"] = sym
+        log(f"  ENTRY {sym} {dirtxt} @ decision_price={cand['decision_price']:.4f} "
+            f"open={cand['period_open']:.4f} poly_price={pp} slug={cand['slug']}")
+        notify(f"📥 Вход {sym} {dirtxt}", f"Polymarket price {pp}\ndecision {cand['decision_price']:.2f} vs open {cand['period_open']:.2f}",
+               tags="dart")
+        escalated = state is not None and state.get("live_stage") == "escalated"
+        live_size = LIVE_RISK_USD_ESCALATED if escalated else LIVE_RISK_USD_START
+        result = broker.place_order(cand["token_id"], cand["trigger_dir"], cand["poly_price"], live_size)
+        s["pending_trade"]["live_order_ok"] = result["ok"]
+        if result["attempted"]:
+            status = "OK" if result["ok"] else "REJECTED"
+            log(f"  LIVE ORDER {sym} {dirtxt} ${live_size:.0f} -> {status}: {result['detail']}")
+            notify(f"{'💰' if result['ok'] else '⚠️'} Реальный ордер {sym} {dirtxt} ${live_size:.0f}",
+                   f"{status}: {result['detail'][:150]}",
+                   tags="moneybag" if result["ok"] else "warning")
+
+
+def process_symbol(sym, state, trades_buffer, candidates):
     s = state["symbols"][sym]
     bars = fetch_closed_klines(sym, limit=30)
     state.setdefault("_diag", {})[sym] = len(bars)
@@ -284,16 +332,18 @@ def process_symbol(sym, state, trades_buffer):
     new_bars = [b for b in bars if s["last_processed_ts"] is None or b["open_time"] > s["last_processed_ts"]]
     if not new_bars:
         return
-    state["symbols"][sym] = advance_state(sym, s, new_bars, state=state, trades_buffer=trades_buffer)
+    state["symbols"][sym] = advance_state(sym, s, new_bars, state=state, trades_buffer=trades_buffer, candidates=candidates)
 
 
 def one_tick(gist_data):
     state = load_state(gist_data)
     trades_text = load_trades_text(gist_data)
     trades_buffer = []
+    candidates = []
     LAST_HTTP_ERROR.clear()
     for sym in SYMBOLS:
-        process_symbol(sym, state, trades_buffer)
+        process_symbol(sym, state, trades_buffer, candidates)
+    resolve_candidates(candidates, state)
     state["_diag_http_err"] = dict(LAST_HTTP_ERROR) or None
     state["_diag_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     if trades_buffer:
