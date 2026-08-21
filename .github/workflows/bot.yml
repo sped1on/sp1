@@ -1,8 +1,11 @@
 name: polybot
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
+  # schedule disabled 2026-08-21 -- GitHub's cron was firing far less often
+  # than every 5 minutes (real gaps of 20-60+ min), unreliable for a bot that
+  # needs to catch a signal within its 15-min window. Switched back to the
+  # local bot on the PC (tick.py). Manual runs still work via workflow_dispatch
+  # below if this ever needs re-testing.
   workflow_dispatch: {}
 
 jobs:
