@@ -30,7 +30,8 @@ jobs:
           RISK_USD: ${{ secrets.RISK_USD }}
           MAX_ENTRY_PRICE: ${{ secrets.MAX_ENTRY_PRICE }}
           LIVE_TRADING: ${{ secrets.LIVE_TRADING }}
-          LIVE_RISK_USD: ${{ secrets.LIVE_RISK_USD }}
+          LIVE_RISK_USD_START: ${{ secrets.LIVE_RISK_USD_START }}
+          LIVE_RISK_USD_ESCALATED: ${{ secrets.LIVE_RISK_USD_ESCALATED }}
           POLY_PRIVATE_KEY: ${{ secrets.POLY_PRIVATE_KEY }}
           POLY_FUNDER: ${{ secrets.POLY_FUNDER }}
         run: python tick_gh.py --loop-for 280

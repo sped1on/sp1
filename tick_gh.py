@@ -31,7 +31,13 @@ HOLD_MIN = int(os.environ.get("HOLD_MIN") or "10")
 MAX_DEV_PCT = float(os.environ.get("MAX_DEV_PCT") or "0.0")
 MIN_ENTRY_DIST_PCT = float(os.environ.get("MIN_ENTRY_DIST_PCT") or "0.15")
 RISK_USD = float(os.environ.get("RISK_USD") or "50.0")
-LIVE_RISK_USD = float(os.environ.get("LIVE_RISK_USD") or str(RISK_USD))  # $ size for REAL orders only; paper stats always use RISK_USD
+# Real-order sizing only (paper stats always use RISK_USD, untouched). Starts
+# small; escalates to the bigger size after the first real order that both
+# went through (wasn't rejected) AND won. Any loss still pauses the whole bot
+# (paper or live) via the existing stop-loss pause, so this never compounds
+# past one step without a human looking at it first.
+LIVE_RISK_USD_START = float(os.environ.get("LIVE_RISK_USD_START") or "5.0")
+LIVE_RISK_USD_ESCALATED = float(os.environ.get("LIVE_RISK_USD_ESCALATED") or "20.0")
 MAX_ENTRY_PRICE = float(os.environ.get("MAX_ENTRY_PRICE") or "0.995")
 PERIOD_MS = CANDLE_MIN * 60 * 1000
 LIVE_TOLERANCE_MS = 120_000
@@ -162,6 +168,9 @@ def resolve_pending(sym, s, prev_sum, prev_count, state=None, trades_buffer=None
     if not success and state is not None:
         state["paused"] = True
         log("  *** STOP-LOSS -- TRADING PAUSED. Set paused=false in the gist (or via --resume) to re-enable. ***")
+    if success and pt.get("live_order_ok") and state is not None and state.get("live_stage") != "escalated":
+        state["live_stage"] = "escalated"
+        log(f"  *** first real order won -- live size escalated to ${LIVE_RISK_USD_ESCALATED:.0f} for future trades ***")
 
 
 def advance_state(sym, s, new_bars, state=None, trades_buffer=None, poly_price_fn=fetch_poly_price):
@@ -237,10 +246,13 @@ def advance_state(sym, s, new_bars, state=None, trades_buffer=None, poly_price_f
                                 state["active_symbol"] = sym
                             pp = f"{poly_price:.3f}" if poly_price is not None else "N/A"
                             log(f"  ENTRY {sym} {dirtxt} @ decision_price={c:.4f} open={period_open:.4f} poly_price={pp} slug={slug}")
-                            result = broker.place_order(token_id, s["trigger_dir"], poly_price, LIVE_RISK_USD)
+                            escalated = state is not None and state.get("live_stage") == "escalated"
+                            live_size = LIVE_RISK_USD_ESCALATED if escalated else LIVE_RISK_USD_START
+                            result = broker.place_order(token_id, s["trigger_dir"], poly_price, live_size)
+                            s["pending_trade"]["live_order_ok"] = result["ok"]
                             if result["attempted"]:
                                 status = "OK" if result["ok"] else "REJECTED"
-                                log(f"  LIVE ORDER {sym} {dirtxt} -> {status}: {result['detail']}")
+                                log(f"  LIVE ORDER {sym} {dirtxt} ${live_size:.0f} -> {status}: {result['detail']}")
                     else:
                         log(f"  (skip, backlog) {sym} would-have-fired {dirtxt} -- catching up, not live")
 
