@@ -47,6 +47,9 @@ def log(msg):
     print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} UTC  {msg}", flush=True)
 
 
+LAST_HTTP_ERROR = {}  # url-prefix -> last error string this run, for gist diagnostics
+
+
 def http_json(url, timeout=10, retries=2, method="GET", data=None, headers=None):
     last_err = None
     for attempt in range(retries + 1):
@@ -61,6 +64,7 @@ def http_json(url, timeout=10, retries=2, method="GET", data=None, headers=None)
             if attempt < retries:
                 time.sleep(1.5)
     log(f"HTTP error after retries: {method} {url} -> {last_err}")
+    LAST_HTTP_ERROR[url.split("?")[0]] = f"{type(last_err).__name__}: {last_err}"
     return None
 
 
@@ -263,6 +267,7 @@ def advance_state(sym, s, new_bars, state=None, trades_buffer=None, poly_price_f
 def process_symbol(sym, state, trades_buffer):
     s = state["symbols"][sym]
     bars = fetch_closed_klines(sym, limit=30)
+    state.setdefault("_diag", {})[sym] = len(bars)
     if not bars:
         return
     new_bars = [b for b in bars if s["last_processed_ts"] is None or b["open_time"] > s["last_processed_ts"]]
@@ -275,8 +280,11 @@ def one_tick(gist_data):
     state = load_state(gist_data)
     trades_text = load_trades_text(gist_data)
     trades_buffer = []
+    LAST_HTTP_ERROR.clear()
     for sym in SYMBOLS:
         process_symbol(sym, state, trades_buffer)
+    state["_diag_http_err"] = dict(LAST_HTTP_ERROR) or None
+    state["_diag_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     if trades_buffer:
         new_lines = "\n".join(json.dumps(t, ensure_ascii=False) for t in trades_buffer)
         trades_text = (trades_text + ("\n" if trades_text and not trades_text.endswith("\n") else "") + new_lines + "\n")
